@@ -1,67 +1,78 @@
-const express = require('express');
-const axios = require('axios');
+const express = require("express");
+const axios = require("axios");
+const dotenv = require("dotenv");
+
+dotenv.config();
 
 const app = express();
-const port = 9876;
-const windowSize = 10;
+const PORT = process.env.PORT || 9876;
 
+const WINDOW_SIZE = 10;
 let windowNumbers = [];
 
-app.get('/numbers/:numberid', async (req, res) => {
-    const numberId = req.params.numberid;
-    const url = getUrlForNumberId(numberId);
+const API_URLS = {
+  p: "http://20.244.56.144/test/primes",
+  f: "http://20.244.56.144/test/fibo",
+  e: "http://20.244.56.144/test/even",
+  r: "http://20.244.56.144/test/rand"
+};
 
+app.use(express.json());
+
+const fetchNumbersWithRetry = async (url, retries = 3) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJNYXBDbGFpbXMiOnsiZXhwIjoxNzQyNjIzNzg3LCJpYXQiOjE3NDI2MjM0ODcsImlzcyI6IkFmZm9yZG1lZCIsImp0aSI6IjBkZGVjMWVlLWUwZjctNGJhYi05NmNkLTI1MzViNTA0YjQwOSIsInN1YiI6IjcxNzgyMmkxNjFAa2NlLmFjLmluIn0sImNvbXBhbnlOYW1lIjoiS2FycGFnYW1jb2xsZWdlb2ZlbmdpbmVlcmluZyIsImNsaWVudElEIjoiMGRkZWMxZWUtZTBmNy00YmFiLTk2Y2QtMjUzNWI1MDRiNDA5IiwiY2xpZW50U2VjcmV0IjoiWGF3Tk5selJ2UVlhaWpaUCIsIm93bmVyTmFtZSI6IlN1a2lTIiwib3duZXJFbWFpbCI6IjcxNzgyMmkxNjFAa2NlLmFjLmluIiwicm9sbE5vIjoiNzE3ODIyaTE2MSJ9.lDcmwW76gfFp9oWArJhQK8odVVlIEL0ic3v0vO_7p4c'
-            },
-            timeout: 500
-        });
-
-        const newNumbers = response.data.numbers.filter(num => !windowNumbers.includes(num));
-        const windowPrevState = [...windowNumbers];
-
-        newNumbers.forEach(num => {
-            if (windowNumbers.length >= windowSize) {
-                windowNumbers.shift();
-            }
-            windowNumbers.push(num);
-        });
-
-        const avg = calculateAverage(windowNumbers);
-
-        res.json({
-            windowPrevState,
-            windowCurrState: windowNumbers,
-            numbers: newNumbers,
-            avg: avg.toFixed(2)
-        });
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${process.env.ACCESS_TOKEN}`
+        },
+        timeout: 5000
+      });
+      return response.data.numbers;
     } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch numbers' });
+      console.error(`Attempt ${attempt}: Failed to fetch numbers`);
+      if (attempt === retries) throw error;
     }
+  }
+};
+
+app.get("/numbers/:numberid", async (req, res) => {
+  const numberType = req.params.numberid;
+
+  if (!API_URLS[numberType]) {
+    return res.status(400).json({ error: "Invalid number type!" });
+  }
+
+  try {
+    const newNumbers = await fetchNumbersWithRetry(API_URLS[numberType]);
+
+    if (!newNumbers || newNumbers.length === 0) {
+      return res.status(500).json({ error: "No numbers received from API" });
+    }
+
+    const uniqueNumbers = newNumbers.filter(num => !windowNumbers.includes(num));
+    windowNumbers = [...windowNumbers, ...uniqueNumbers].slice(-WINDOW_SIZE);
+
+    const avg = windowNumbers.length
+      ? (windowNumbers.reduce((sum, num) => sum + num, 0) / windowNumbers.length).toFixed(2)
+      : 0;
+
+    res.json({
+      windowPrevState: windowNumbers.slice(0, -uniqueNumbers.length),
+      windowCurrState: windowNumbers,
+      numbers: uniqueNumbers,
+      avg: parseFloat(avg)
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch numbers", details: error.message });
+  }
 });
 
-function getUrlForNumberId(numberId) {
-    switch (numberId) {
-        case 'p':
-            return 'http://20.244.56.144/test/primes';
-        case 'f':
-            return 'http://20.244.56.144/test/fibo';
-        case 'e':
-            return 'http://20.244.56.144/test/even';
-        case 'r':
-            return 'http://20.244.56.144/test/rand';
-        default:
-            throw new Error('Invalid number ID');
-    }
-}
+app.get("/", (req, res) => {
+  res.send("Server is running! Use /numbers/{numberid} to get numbers.");
+});
 
-function calculateAverage(numbers) {
-    const sum = numbers.reduce((acc, num) => acc + num, 0);
-    return sum / numbers.length;
-}
-
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`Server is running at: http://localhost:${PORT}/numbers/p`);
 });
